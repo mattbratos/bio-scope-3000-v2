@@ -20,6 +20,13 @@ import * as tf from '@tensorflow/tfjs'
 import * as cocoSsd from "@tensorflow-models/coco-ssd"
 import { ANIMAL_CLASSES } from "@/config/animals"
 
+interface ProcessingStatus {
+  frameId: string
+  timestamp: number
+  status: "started" | "completed" | "error"
+  progress: number
+}
+
 export function VideoProcessor() {
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string>("")
@@ -27,7 +34,10 @@ export function VideoProcessor() {
   const [currentFrame, setCurrentFrame] = useState<FrameData | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [progress, setProgress] = useState(0)
+  const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null)
   const [selectedMask, setSelectedMask] = useState<Mask | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [detections, setDetections] = useState<Record<string, {
@@ -100,97 +110,62 @@ export function VideoProcessor() {
       }
 
       try {
-        // Run animal detection on the current frame
-        console.log("🔍 Running detection on frame at time:", videoRef.current.currentTime)
-        const predictions = await modelRef.current.detect(videoRef.current)
-        console.log("📊 Raw predictions:", predictions)
-        
-        // Filter and count animal detections
-        const currentFrameAnimals: Record<string, { count: number, confidence: number }> = {}
-        
-        // First, process current frame detections
-        predictions.forEach(({ class: className, score }) => {
-          console.log(`🎯 Checking detection: ${className} (confidence: ${score})`)
-          if (score > 0.5 && ANIMAL_CLASSES.has(className)) {
-            console.log(`✅ Found animal: ${className} with high confidence`)
-            currentFrameAnimals[className] = {
-              count: (currentFrameAnimals[className]?.count || 0) + 1,
-              confidence: score
-            }
-          } else if (ANIMAL_CLASSES.has(className)) {
-            console.log(`ℹ️ Animal ${className} detected with lower confidence: ${score}`)
-          }
-        })
-
-        // Update persistent animals
-        setPersistentAnimals(prev => {
-          const newPersistentAnimals = { ...prev }
-
-          // Add or update animals from current frame
-          Object.entries(currentFrameAnimals).forEach(([animal, data]) => {
-            newPersistentAnimals[animal] = {
-              count: data.count,
-              lastConfidence: data.confidence
-            }
-          })
-
-          // Keep existing animals that weren't in current frame but had high confidence
-          Object.entries(prev).forEach(([animal, data]) => {
-            if (!currentFrameAnimals[animal] && data.lastConfidence > 0.5) {
-              newPersistentAnimals[animal] = data
-            }
-          })
-
-          return newPersistentAnimals
-        })
-
-        // Set detections combining current frame and persistent animals
-        const combinedDetections: Record<string, number> = {}
-        Object.entries(persistentAnimals).forEach(([animal, data]) => {
-          if (data.lastConfidence > 0.5) {
-            combinedDetections[animal] = data.count
-          }
-        })
-        
-        console.log("🐾 Final animal counts (including persistent):", combinedDetections)
-        setDetections(prev => ({
-          ...prev,
-          ...combinedDetections.map(count => ({
-            [Object.keys(combinedDetections)[0]]: {
-              count,
-              confidence: 1,
-              timestamps: [videoRef.current?.currentTime || 0]
-            }
-          }))
-        }))
-
-        // Use all predictions for segmentation
-        const objects = predictions.map(pred => ({
-          label: pred.class,
-          confidence: pred.score,
-          bbox: [pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]] as [number, number, number, number],
-          category: ANIMAL_CLASSES.has(pred.class) ? "dynamic" : "static"
-        }))
-
+        // Update current frame with processing results
         setCurrentFrame((prev) => {
           if (!prev) return prev
           return {
             ...prev,
             segmentation: {
-              masks: objects.map((obj) => ({
+              masks: result.objects.map((obj: any) => ({
                 id: `mask-${Math.random()}`,
                 points: convertBBoxToPoints(obj.bbox),
                 label: obj.label,
                 confidence: obj.confidence,
                 category: obj.category,
               })),
-              labels: objects.map((obj) => obj.label),
-              confidence: objects.map((obj) => obj.confidence),
+              labels: result.objects.map((obj: any) => obj.label),
+              confidence: result.objects.map((obj: any) => obj.confidence),
             },
           }
         })
+
+        // Update processing status
+        if (result.type === "PROCESSING_STATUS") {
+          setProcessingStatus(result)
+          setProgress(result.progress)
+          
+          // Update video preview to show current frame being processed
+          if (videoRef.current && result.status === "started") {
+            videoRef.current.currentTime = result.timestamp
+          }
+        }
+
+        // Update detections for the current frame
+        const currentFrameAnimals: Record<string, { count: number, confidence: number }> = {}
+        result.objects.forEach((obj: any) => {
+          if (obj.confidence > 0.5 && ANIMAL_CLASSES.has(obj.label)) {
+            currentFrameAnimals[obj.label] = {
+              count: (currentFrameAnimals[obj.label]?.count || 0) + 1,
+              confidence: obj.confidence
+            }
+          }
+        })
+
+        // Update persistent animals state
+        setPersistentAnimals(prev => {
+          const newPersistentAnimals = { ...prev }
+          Object.entries(currentFrameAnimals).forEach(([animal, data]) => {
+            newPersistentAnimals[animal] = {
+              count: data.count,
+              lastConfidence: data.confidence
+            }
+          })
+          return newPersistentAnimals
+        })
+
       } catch (error) {
-        console.error("❌ Error during animal detection:", error)
+        console.error("❌ Error during frame processing:", error)
+        setError(error instanceof Error ? error.message : "Unknown error")
       }
     }
 
@@ -226,6 +201,9 @@ export function VideoProcessor() {
     console.log("📁 Loading video file:", file.name)
     setVideoFile(file)
     setError(null)
+    setIsUploading(true)
+    setUploadProgress(0)
+    
     // Reset states
     setProcessedData(null)
     setCurrentFrame(null)
@@ -242,85 +220,122 @@ export function VideoProcessor() {
     const video = videoRef.current
     if (!video) return
 
-    video.src = url
-
     try {
-      // Wait for video metadata to load
-      await new Promise((resolve, reject) => {
-        video.onloadedmetadata = resolve
-        video.onerror = reject
-      })
+      // Simulate upload progress
+      const totalSize = file.size
+      let loadedSize = 0
+      const chunkSize = Math.ceil(totalSize / 100) // Split into 100 chunks for smooth progress
 
-      console.log("📼 Video metadata loaded:", {
-        duration: video.duration,
-        width: video.videoWidth,
-        height: video.videoHeight
-      })
-
-      // Set up resolution manager
-      const resManager = new ResolutionManager(video.videoWidth, video.videoHeight)
-      const processRes = resManager.getProcessingResolution()
-      setResolution(processRes)
-
-      // Create frames at lower rate for preview
-      const frameCount = Math.ceil(video.duration * PREVIEW_FPS)
-      const interval = 1 / PREVIEW_FPS
-      const frames: FrameData[] = []
-
-      console.log("🎞️ Generating preview frames:", {
-        frameCount,
-        interval,
-        fps: PREVIEW_FPS
-      })
-
-      // Generate frame previews
-      const canvas = document.createElement('canvas')
-      canvas.width = 160  // thumbnail width
-      canvas.height = 90  // thumbnail height
-      const ctx = canvas.getContext('2d')
-
-      for (let i = 0; i < frameCount; i++) {
-        video.currentTime = i * interval
-        await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }))
-        
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-          const thumbnail = canvas.toDataURL('image/jpeg', 0.7)
-          
-          frames.push({
-            id: `frame-${i}`,
-            timestamp: i * interval,
-            segmentation: {
-              masks: [],
-              labels: [],
-              confidence: [],
-            },
-            thumbnail: thumbnail,
-          })
+      const reader = new FileReader()
+      
+      reader.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = (event.loaded / event.total) * 100
+          setUploadProgress(Math.round(progress))
         }
       }
 
-      // Reset video time
-      video.currentTime = 0
+      reader.onload = async () => {
+        try {
+          video.src = url
+          
+          // Wait for video metadata to load
+          await new Promise((resolve, reject) => {
+            video.onloadedmetadata = resolve
+            video.onerror = reject
+          })
 
-      const initialData = {
-        frames,
-        duration: video.duration,
-        resolution: processRes,
+          console.log("📼 Video metadata loaded:", {
+            duration: video.duration,
+            width: video.videoWidth,
+            height: video.videoHeight
+          })
+
+          // Set up resolution manager
+          const resManager = new ResolutionManager(video.videoWidth, video.videoHeight)
+          const processRes = resManager.getProcessingResolution()
+          setResolution(processRes)
+
+          // Create frames at lower rate for preview
+          const frameCount = Math.ceil(video.duration * PREVIEW_FPS)
+          const interval = 1 / PREVIEW_FPS
+          const frames: FrameData[] = []
+
+          console.log("🎞️ Generating preview frames:", {
+            frameCount,
+            interval,
+            fps: PREVIEW_FPS
+          })
+
+          // Generate frame previews
+          const canvas = document.createElement('canvas')
+          canvas.width = 160  // thumbnail width
+          canvas.height = 90  // thumbnail height
+          const ctx = canvas.getContext('2d')
+
+          for (let i = 0; i < frameCount; i++) {
+            video.currentTime = i * interval
+            await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }))
+            
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+              const thumbnail = canvas.toDataURL('image/jpeg', 0.7)
+              
+              frames.push({
+                id: `frame-${i}`,
+                timestamp: i * interval,
+                segmentation: {
+                  masks: [],
+                  labels: [],
+                  confidence: [],
+                },
+                thumbnail: thumbnail,
+              })
+            }
+          }
+
+          // Reset video time
+          video.currentTime = 0
+
+          const initialData = {
+            frames,
+            duration: video.duration,
+            resolution: processRes,
+          }
+
+          console.log("✅ Initial data prepared:", {
+            frameCount: frames.length,
+            duration: video.duration,
+            resolution: processRes
+          })
+
+          setProcessedData(initialData)
+          setCurrentFrame(frames[0])
+          setIsUploading(false)
+          setUploadProgress(100)
+
+        } catch (error) {
+          console.error("❌ Error loading video:", error)
+          setError(error instanceof Error ? error.message : "Failed to load video file")
+          setIsUploading(false)
+          setUploadProgress(0)
+        }
       }
 
-      console.log("✅ Initial data prepared:", {
-        frameCount: frames.length,
-        duration: video.duration,
-        resolution: processRes
-      })
+      reader.onerror = () => {
+        setError("Failed to read video file")
+        setIsUploading(false)
+        setUploadProgress(0)
+      }
 
-      setProcessedData(initialData)
-      setCurrentFrame(frames[0])
+      // Start reading the file
+      reader.readAsArrayBuffer(file)
 
     } catch (error) {
       console.error("❌ Error loading video:", error)
       setError(error instanceof Error ? error.message : "Failed to load video file")
+      setIsUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -667,9 +682,9 @@ export function VideoProcessor() {
   }, [videoUrl])
 
   return (
-    <div className="container mx-auto px-4 space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <Card className="p-4 md:col-span-2">
+    <div className="container mx-auto p-4 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="md:col-span-2 p-4 space-y-4">
           <div className="space-y-4">
             <div className="flex items-center gap-4">
               <Input
@@ -677,9 +692,12 @@ export function VideoProcessor() {
                 accept="video/*"
                 onChange={handleFileChange}
                 className="flex-1"
-                disabled={isProcessing}
+                disabled={isProcessing || isUploading}
               />
-              <Button onClick={handleProcessVideo} disabled={!videoFile || isProcessing}>
+              <Button 
+                onClick={handleProcessVideo} 
+                disabled={!videoFile || isProcessing || isUploading || !processedData}
+              >
                 {isProcessing ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -696,10 +714,21 @@ export function VideoProcessor() {
 
             {error && <div className="text-red-500">{error}</div>}
 
+            {isUploading && (
+              <div className="space-y-2">
+                <Progress value={uploadProgress} />
+                <p className="text-sm text-muted-foreground text-center">
+                  Uploading video... {Math.round(uploadProgress)}%
+                </p>
+              </div>
+            )}
+
             {isProcessing && (
               <div className="space-y-2">
                 <Progress value={progress} />
-                <p className="text-sm text-muted-foreground text-center">{Math.round(progress)}% complete</p>
+                <p className="text-sm text-muted-foreground text-center">
+                  Processing video... {Math.round(progress)}%
+                </p>
               </div>
             )}
 
@@ -717,7 +746,15 @@ export function VideoProcessor() {
                   resolution={resolution}
                   onMaskUpdate={handleMaskUpdate}
                   onMaskSelect={handleMaskSelect}
+                  readOnly={true}
+                  showDetections={true}
                 />
+              )}
+              {processingStatus && processingStatus.status === "started" && (
+                <div className="absolute top-2 right-2 bg-black/80 text-white px-3 py-1 rounded-full text-sm flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Analyzing frame {processingStatus.timestamp.toFixed(2)}s
+                </div>
               )}
             </div>
 
@@ -727,6 +764,7 @@ export function VideoProcessor() {
                 duration={processedData.duration}
                 currentTime={currentTime}
                 onSeek={handleSeek}
+                videoUrl={videoUrl}
               />
             )}
           </div>

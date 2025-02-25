@@ -6,23 +6,33 @@ import type { FrameData, Point, Mask } from "@/types"
 import { useTheme } from "next-themes"
 
 interface CanvasEditorProps {
-  frame?: FrameData
-  width: number
-  height: number
+  frame: FrameData
+  resolution: { width: number; height: number }
   onMaskUpdate?: (maskId: string, points: Point[]) => void
   onMaskSelect?: (mask: Mask) => void
   videoUrl?: string
   currentTime?: number
+  readOnly?: boolean
+  showDetections?: boolean
 }
 
-export function CanvasEditor({ frame, width, height, onMaskUpdate, onMaskSelect, videoUrl, currentTime = 0 }: CanvasEditorProps) {
+export function CanvasEditor({ 
+  frame, 
+  resolution, 
+  onMaskUpdate, 
+  onMaskSelect, 
+  videoUrl, 
+  currentTime = 0,
+  readOnly = false,
+  showDetections = true
+}: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const [currentPoints, setCurrentPoints] = useState<Point[]>([])
   const { theme } = useTheme()
 
-  // Draw everything on canvas
+  // Draw function to show detections and masks
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
     const video = videoRef.current
@@ -32,55 +42,61 @@ export function CanvasEditor({ frame, width, height, onMaskUpdate, onMaskSelect,
     if (!ctx) return
 
     // Clear canvas
-    ctx.clearRect(0, 0, width, height)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     // Draw video frame
-    ctx.drawImage(video, 0, 0, width, height)
+    if (video.readyState >= 2) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    }
 
-    // Draw existing masks
-    if (frame) {
-      const maskColor = theme === "dark" ? "#00ff00" : "#008000"
-
+    // Draw existing masks if showing detections
+    if (showDetections && frame.segmentation.masks.length > 0) {
       frame.segmentation.masks.forEach((mask) => {
-        // Draw mask
         ctx.beginPath()
-        mask.points.forEach((point, i) => {
-          if (i === 0) {
-            ctx.moveTo(point.x, point.y)
-          } else {
-            ctx.lineTo(point.x, point.y)
-          }
+        ctx.moveTo(mask.points[0].x, mask.points[0].y)
+        mask.points.slice(1).forEach((point) => {
+          ctx.lineTo(point.x, point.y)
         })
         ctx.closePath()
-        ctx.strokeStyle = maskColor
+        
+        // Style based on category
+        if (mask.category === "dynamic") {
+          ctx.strokeStyle = "rgba(0, 255, 0, 0.8)"
+          ctx.fillStyle = "rgba(0, 255, 0, 0.2)"
+        } else {
+          ctx.strokeStyle = "rgba(255, 0, 0, 0.8)"
+          ctx.fillStyle = "rgba(255, 0, 0, 0.2)"
+        }
+        
         ctx.lineWidth = 2
         ctx.stroke()
-        ctx.fillStyle = maskColor + "20"
         ctx.fill()
 
         // Draw label
-        ctx.fillStyle = maskColor
-        ctx.font = "12px GeistMono"
-        const firstPoint = mask.points[0]
-        ctx.fillText(`${mask.label} (${Math.round(mask.confidence * 100)}%)`, firstPoint.x, firstPoint.y - 20)
+        const centerX = mask.points.reduce((sum, p) => sum + p.x, 0) / mask.points.length
+        const centerY = mask.points.reduce((sum, p) => sum + p.y, 0) / mask.points.length
+        
+        ctx.font = "12px Arial"
+        ctx.fillStyle = "white"
+        ctx.strokeStyle = "black"
+        ctx.lineWidth = 3
+        ctx.strokeText(`${mask.label} (${(mask.confidence * 100).toFixed(0)}%)`, centerX, centerY)
+        ctx.fillText(`${mask.label} (${(mask.confidence * 100).toFixed(0)}%)`, centerX, centerY)
       })
     }
 
-    // Draw current drawing
-    if (currentPoints.length > 0) {
+    // Draw current points only if not in read-only mode
+    if (!readOnly && isDrawing && currentPoints.length > 0) {
       ctx.beginPath()
-      currentPoints.forEach((point, i) => {
-        if (i === 0) {
-          ctx.moveTo(point.x, point.y)
-        } else {
-          ctx.lineTo(point.x, point.y)
-        }
+      ctx.moveTo(currentPoints[0].x, currentPoints[0].y)
+      currentPoints.slice(1).forEach((point) => {
+        ctx.lineTo(point.x, point.y)
       })
-      ctx.strokeStyle = "#ff0000"
+      ctx.strokeStyle = "#00ff00"
       ctx.lineWidth = 2
       ctx.stroke()
     }
-  }, [frame, currentPoints, width, height, theme])
+  }, [frame, isDrawing, currentPoints, showDetections, readOnly])
 
   // Handle video frame updates
   useEffect(() => {
@@ -118,20 +134,23 @@ export function CanvasEditor({ frame, width, height, onMaskUpdate, onMaskSelect,
     return { x, y }
   }, [])
 
-  const handleStart = useCallback(
-    (e: MouseEvent | TouchEvent) => {
+  // Only attach mouse/touch handlers if not in read-only mode
+  useEffect(() => {
+    if (readOnly) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const handleStart = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       const point = getCanvasPoint(e)
       if (!point) return
 
       setIsDrawing(true)
       setCurrentPoints([point])
-    },
-    [getCanvasPoint],
-  )
+    }
 
-  const handleMove = useCallback(
-    (e: MouseEvent | TouchEvent) => {
+    const handleMove = (e: MouseEvent | TouchEvent) => {
       e.preventDefault()
       if (!isDrawing) return
 
@@ -143,70 +162,45 @@ export function CanvasEditor({ frame, width, height, onMaskUpdate, onMaskSelect,
         drawCanvas()
         return newPoints
       })
-    },
-    [isDrawing, getCanvasPoint, drawCanvas],
-  )
+    }
 
-  const handleEnd = useCallback(
-    (e: MouseEvent | TouchEvent) => {
-      e.preventDefault()
+    const handleEnd = () => {
       if (!isDrawing) return
 
       setIsDrawing(false)
-      if (currentPoints.length > 2) {
-        const firstPoint = currentPoints[0]
-        const points = [...currentPoints, firstPoint]
-        onMaskUpdate?.("new", points)
+      if (currentPoints.length > 2 && onMaskUpdate) {
+        const maskId = `mask-${Date.now()}`
+        onMaskUpdate(maskId, currentPoints)
       }
       setCurrentPoints([])
-      drawCanvas()
-    },
-    [currentPoints, isDrawing, onMaskUpdate, drawCanvas],
-  )
+    }
 
-  // Set up event listeners
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const handleMouseDown = (e: MouseEvent) => handleStart(e)
-    const handleMouseMove = (e: MouseEvent) => handleMove(e)
-    const handleMouseUp = (e: MouseEvent) => handleEnd(e)
-    const handleTouchStart = (e: TouchEvent) => handleStart(e)
-    const handleTouchMove = (e: TouchEvent) => handleMove(e)
-    const handleTouchEnd = (e: TouchEvent) => handleEnd(e)
-
-    canvas.addEventListener("mousedown", handleMouseDown)
-    canvas.addEventListener("mousemove", handleMouseMove)
-    canvas.addEventListener("mouseup", handleMouseUp)
-    canvas.addEventListener("mouseleave", handleMouseUp)
-    canvas.addEventListener("touchstart", handleTouchStart)
-    canvas.addEventListener("touchmove", handleTouchMove)
-    canvas.addEventListener("touchend", handleTouchEnd)
+    canvas.addEventListener("mousedown", handleStart)
+    canvas.addEventListener("mousemove", handleMove)
+    canvas.addEventListener("mouseup", handleEnd)
+    canvas.addEventListener("mouseleave", handleEnd)
+    canvas.addEventListener("touchstart", handleStart)
+    canvas.addEventListener("touchmove", handleMove)
+    canvas.addEventListener("touchend", handleEnd)
 
     return () => {
-      canvas.removeEventListener("mousedown", handleMouseDown)
-      canvas.removeEventListener("mousemove", handleMouseMove)
-      canvas.removeEventListener("mouseup", handleMouseUp)
-      canvas.removeEventListener("mouseleave", handleMouseUp)
-      canvas.removeEventListener("touchstart", handleTouchStart)
-      canvas.removeEventListener("touchmove", handleTouchMove)
-      canvas.removeEventListener("touchend", handleTouchEnd)
+      canvas.removeEventListener("mousedown", handleStart)
+      canvas.removeEventListener("mousemove", handleMove)
+      canvas.removeEventListener("mouseup", handleEnd)
+      canvas.removeEventListener("mouseleave", handleEnd)
+      canvas.removeEventListener("touchstart", handleStart)
+      canvas.removeEventListener("touchmove", handleMove)
+      canvas.removeEventListener("touchend", handleEnd)
     }
-  }, [handleStart, handleMove, handleEnd])
+  }, [readOnly, isDrawing, currentPoints, onMaskUpdate, drawCanvas])
 
   return (
     <Card className="relative overflow-hidden">
       <canvas
         ref={canvasRef}
-        width={width}
-        height={height}
-        className="touch-none"
-        style={{
-          width: "100%",
-          height: "auto",
-          cursor: isDrawing ? "crosshair" : "default",
-        }}
+        width={resolution.width}
+        height={resolution.height}
+        className="absolute inset-0 w-full h-full"
       />
       <video ref={videoRef} className="hidden" crossOrigin="anonymous" />
     </Card>

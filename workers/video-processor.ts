@@ -2,7 +2,7 @@ import { analyzeFrame } from "../lib/ai-service"
 
 interface ProcessFrameMessage {
   type: "PROCESS_FRAME"
-  frame: HTMLVideoElement | HTMLCanvasElement // Changed from string to HTML element
+  frame: HTMLVideoElement | HTMLCanvasElement
   timestamp: number
   frameId: string
 }
@@ -18,6 +18,14 @@ interface ProcessingResult {
   }>
 }
 
+interface ProcessingStatus {
+  type: "PROCESSING_STATUS"
+  frameId: string
+  timestamp: number
+  status: "started" | "completed" | "error"
+  progress: number
+}
+
 const ctx: Worker = self as any
 
 // Create an offscreen canvas for processing
@@ -29,6 +37,15 @@ ctx.addEventListener("message", async (e: MessageEvent) => {
 
   if (type === "PROCESS_FRAME") {
     try {
+      // Notify that processing has started for this frame
+      ctx.postMessage({
+        type: "PROCESSING_STATUS",
+        frameId,
+        timestamp,
+        status: "started",
+        progress: 0
+      } as ProcessingStatus)
+
       // Resize canvas if needed
       if (canvas.width !== frame.width || canvas.height !== frame.height) {
         canvas.width = frame.width
@@ -53,11 +70,30 @@ ctx.addEventListener("message", async (e: MessageEvent) => {
         objects: processedObjects,
       }
 
+      // Notify that processing is complete
+      ctx.postMessage({
+        type: "PROCESSING_STATUS",
+        frameId,
+        timestamp,
+        status: "completed",
+        progress: 100
+      } as ProcessingStatus)
+
+      // Send the processed results
       ctx.postMessage({
         type: "FRAME_PROCESSED",
         result: processingResult,
       })
     } catch (error) {
+      // Notify of error in processing
+      ctx.postMessage({
+        type: "PROCESSING_STATUS",
+        frameId,
+        timestamp,
+        status: "error",
+        progress: 0
+      } as ProcessingStatus)
+
       ctx.postMessage({
         type: "ERROR",
         error: error instanceof Error ? error.message : "Unknown error",
