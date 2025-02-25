@@ -1,9 +1,8 @@
-import { VideoProcessor } from "@/components/VideoProcessor"
-import { AnimatedBackground } from "@/components/animated-background"
-import { ThemeToggle } from "@/components/theme-toggle"
-import { Logo } from "@/components/logo"
-import { VideoObjectDetection } from "@/components/VideoObjectDetection"
-
+import { VideoProcessor } from "@/components/VideoProcessor";
+import { AnimatedBackground } from "@/components/animated-background";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/logo";
+import { VideoObjectDetection } from "@/components/VideoObjectDetection";
 
 export default function Home() {
   return (
@@ -19,6 +18,5 @@ export default function Home() {
         <VideoProcessor />
       </main>
     </div>
-  )
+  );
 }
-

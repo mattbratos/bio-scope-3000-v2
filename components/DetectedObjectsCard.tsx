@@ -1,35 +1,38 @@
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { formatTime } from "@/lib/utils"
-import { Progress } from "@/components/ui/progress"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Clock, Download } from "lucide-react"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { formatTime } from "@/lib/utils";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Clock, Download } from "lucide-react";
 
 interface DetectedObjectsCardProps {
-  detections: Record<string, {
-    count: number,
-    confidence: number,
-    timestamps: number[]
-  }>
-  isLoading?: boolean
-  onTimestampClick?: (time: number) => void
-  onExport?: () => void
+  detections: Record<
+    string,
+    {
+      count: number;
+      confidence: number;
+      timestamps: number[];
+    }
+  >;
+  isLoading?: boolean;
+  onTimestampClick?: (time: number) => void;
+  onExport?: () => void;
 }
 
-export function DetectedObjectsCard({ 
-  detections, 
+export function DetectedObjectsCard({
+  detections,
   isLoading = false,
   onTimestampClick,
-  onExport
+  onExport,
 }: DetectedObjectsCardProps) {
   const getTimeRange = (timestamps: number[]) => {
-    if (timestamps.length === 0) return null
-    const sortedTimes = timestamps.sort((a, b) => a - b)
+    if (timestamps.length === 0) return null;
+    const sortedTimes = timestamps.sort((a, b) => a - b);
     return {
       start: Math.min(...sortedTimes),
-      end: Math.max(...sortedTimes)
-    }
-  }
+      end: Math.max(...sortedTimes),
+    };
+  };
 
   return (
     <Card className="w-full max-w-2xl">
@@ -58,13 +61,15 @@ export function DetectedObjectsCard({
         ) : (
           <ul className="space-y-4">
             {Object.entries(detections).map(([objectName, data]) => {
-              const timeRange = getTimeRange(data.timestamps)
-              if (!timeRange) return null
+              const timeRange = getTimeRange(data.timestamps);
+              if (!timeRange) return null;
 
               return (
                 <li key={objectName} className="rounded-lg border p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-lg font-semibold capitalize">{objectName}</span>
+                    <span className="text-lg font-semibold capitalize">
+                      {objectName}
+                    </span>
                     <div className="flex items-center space-x-2">
                       <span className="text-sm font-medium text-muted-foreground">
                         {(data.confidence * 100).toFixed(1)}%
@@ -73,19 +78,22 @@ export function DetectedObjectsCard({
                     </div>
                   </div>
                   <Progress value={data.confidence * 100} className="h-2" />
-                  <div 
+                  <div
                     className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer"
                     onClick={() => onTimestampClick?.(timeRange.start)}
                   >
                     <Clock className="w-3.5 h-3.5" />
-                    <span>{formatTime(timeRange.start)} - {formatTime(timeRange.end)}</span>
+                    <span>
+                      {formatTime(timeRange.start)} -{" "}
+                      {formatTime(timeRange.end)}
+                    </span>
                   </div>
                 </li>
-              )
+              );
             })}
           </ul>
         )}
       </CardContent>
     </Card>
-  )
-} 
+  );
+}
