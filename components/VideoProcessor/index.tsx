@@ -12,9 +12,13 @@ import { CanvasEditor } from "../Canvas/Editor"
 import { Timeline } from "../ui/Timeline"
 import { SegmentationTools } from "../SegmentationTools"
 import { StatisticsCard } from "../StatisticsCard"
+import { DetectedObjectsCard } from "../DetectedObjectsCard"
 import type { ProcessedVideoData, FrameData, Point, Mask, ExportData } from "@/types"
 import { ResolutionManager } from "./ResolutionManager"
 import { VideoProcessor as AIProcessor } from "@/lib/video-processor"
+import * as tf from '@tensorflow/tfjs'
+import * as cocoSsd from "@tensorflow-models/coco-ssd"
+import { ANIMAL_CLASSES } from "@/config/animals"
 
 export function VideoProcessor() {
   const [videoFile, setVideoFile] = useState<File | null>(null)
@@ -26,64 +30,172 @@ export function VideoProcessor() {
   const [progress, setProgress] = useState(0)
   const [selectedMask, setSelectedMask] = useState<Mask | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [detections, setDetections] = useState<Record<string, number>>({})
+  const [persistentAnimals, setPersistentAnimals] = useState<Record<string, { count: number, lastConfidence: number }>>({})
+  const [isModelLoading, setIsModelLoading] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
   const processorRef = useRef<AIProcessor | null>(null)
+  const modelRef = useRef<cocoSsd.ObjectDetection | null>(null)
   const [resolution, setResolution] = useState({ width: 0, height: 0 })
+
+  // Initialize TensorFlow.js backend
+  useEffect(() => {
+    async function initTF() {
+      try {
+        console.log("🔄 Initializing TensorFlow.js backend...")
+        await tf.ready()
+        console.log("✅ TensorFlow.js backend initialized:", tf.getBackend())
+      } catch (error) {
+        console.error("❌ Failed to initialize TensorFlow.js backend:", error)
+      }
+    }
+    initTF()
+  }, [])
+
+  // Load COCO-SSD model
+  useEffect(() => {
+    async function loadModel() {
+      try {
+        // Make sure TensorFlow.js is ready
+        await tf.ready()
+        console.log("🔄 Loading COCO-SSD model...")
+        const model = await cocoSsd.load({
+          base: 'mobilenet_v2'  // Use full model for better accuracy
+        })
+        modelRef.current = model
+        setIsModelLoading(false)
+        console.log("✅ COCO-SSD model loaded successfully")
+      } catch (error) {
+        console.error("❌ Failed to load COCO-SSD model:", error)
+        setIsModelLoading(false)
+      }
+    }
+    loadModel()
+  }, [])
 
   // Initialize AI processor
   useEffect(() => {
     processorRef.current = new AIProcessor()
-    processorRef.current.onFrameProcessed = (result) => {
-      if (!currentFrame) return
+    processorRef.current.onFrameProcessed = async (result) => {
+      if (!currentFrame || !modelRef.current || !videoRef.current) {
+        console.log("⚠️ Missing requirements for detection:", {
+          hasCurrentFrame: !!currentFrame,
+          hasModel: !!modelRef.current,
+          hasVideo: !!videoRef.current
+        })
+        return
+      }
 
-      // Add some initial test data if no objects were detected
-      const objects =
-        result.objects.length > 0
-          ? result.objects
-          : [
-              {
-                label: "Bear",
-                confidence: 0.95,
-                bbox: [100, 100, 200, 150],
-                category: "dynamic",
-              },
-              {
-                label: "Tree",
-                confidence: 0.98,
-                bbox: [300, 50, 100, 300],
-                category: "static",
-              },
-              {
-                label: "Tree",
-                confidence: 0.97,
-                bbox: [450, 75, 120, 280],
-                category: "static",
-              },
-            ]
+      try {
+        // Run animal detection on the current frame
+        console.log("🔍 Running detection on frame at time:", videoRef.current.currentTime)
+        const predictions = await modelRef.current.detect(videoRef.current)
+        console.log("📊 Raw predictions:", predictions)
+        
+        // Filter and count animal detections
+        const currentFrameAnimals: Record<string, { count: number, confidence: number }> = {}
+        
+        // First, process current frame detections
+        predictions.forEach(({ class: className, score }) => {
+          console.log(`🎯 Checking detection: ${className} (confidence: ${score})`)
+          if (score > 0.5 && ANIMAL_CLASSES.has(className)) {
+            console.log(`✅ Found animal: ${className} with high confidence`)
+            currentFrameAnimals[className] = {
+              count: (currentFrameAnimals[className]?.count || 0) + 1,
+              confidence: score
+            }
+          } else if (ANIMAL_CLASSES.has(className)) {
+            console.log(`ℹ️ Animal ${className} detected with lower confidence: ${score}`)
+          }
+        })
 
-      setCurrentFrame((prev) => {
-        if (!prev) return prev
-        return {
-          ...prev,
-          segmentation: {
-            masks: objects.map((obj: any) => ({
-              id: `mask-${Math.random()}`,
-              points: convertBBoxToPoints(obj.bbox),
-              label: obj.label,
-              confidence: obj.confidence,
-              category: obj.category,
-            })),
-            labels: objects.map((obj: any) => obj.label),
-            confidence: objects.map((obj: any) => obj.confidence),
-          },
-        }
-      })
+        // Update persistent animals
+        setPersistentAnimals(prev => {
+          const newPersistentAnimals = { ...prev }
+
+          // Add or update animals from current frame
+          Object.entries(currentFrameAnimals).forEach(([animal, data]) => {
+            newPersistentAnimals[animal] = {
+              count: data.count,
+              lastConfidence: data.confidence
+            }
+          })
+
+          // Keep existing animals that weren't in current frame but had high confidence
+          Object.entries(prev).forEach(([animal, data]) => {
+            if (!currentFrameAnimals[animal] && data.lastConfidence > 0.5) {
+              newPersistentAnimals[animal] = data
+            }
+          })
+
+          return newPersistentAnimals
+        })
+
+        // Set detections combining current frame and persistent animals
+        const combinedDetections: Record<string, number> = {}
+        Object.entries(persistentAnimals).forEach(([animal, data]) => {
+          if (data.lastConfidence > 0.5) {
+            combinedDetections[animal] = data.count
+          }
+        })
+        
+        console.log("🐾 Final animal counts (including persistent):", combinedDetections)
+        setDetections(combinedDetections)
+
+        // Use all predictions for segmentation
+        const objects = predictions.map(pred => ({
+          label: pred.class,
+          confidence: pred.score,
+          bbox: [pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]] as [number, number, number, number],
+          category: ANIMAL_CLASSES.has(pred.class) ? "dynamic" : "static"
+        }))
+
+        setCurrentFrame((prev) => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            segmentation: {
+              masks: objects.map((obj) => ({
+                id: `mask-${Math.random()}`,
+                points: convertBBoxToPoints(obj.bbox),
+                label: obj.label,
+                confidence: obj.confidence,
+                category: obj.category,
+              })),
+              labels: objects.map((obj) => obj.label),
+              confidence: objects.map((obj) => obj.confidence),
+            },
+          }
+        })
+      } catch (error) {
+        console.error("❌ Error during animal detection:", error)
+      }
     }
 
     return () => {
       processorRef.current = null
     }
   }, [currentFrame])
+
+  // Add debug log to video element
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const handlePlay = () => {
+      console.log("▶️ Video started playing")
+      console.log("Video properties:", {
+        currentTime: video.currentTime,
+        duration: video.duration,
+        readyState: video.readyState,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight
+      })
+    }
+
+    video.addEventListener('play', handlePlay)
+    return () => video.removeEventListener('play', handlePlay)
+  }, [])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -302,78 +414,82 @@ export function VideoProcessor() {
   }, [videoUrl])
 
   return (
-    <div className="container mx-auto p-4 space-y-4">
-      <Card className="p-6">
-        <div className="space-y-4">
-          <div className="flex items-center gap-4">
-            <Input type="file" accept="video/*" onChange={handleFileChange} className="max-w-sm" />
-            <Button disabled={!videoFile || isProcessing} onClick={handleProcessVideo}>
-              {isProcessing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing
-                </>
-              ) : (
-                "Process Video"
-              )}
-            </Button>
-          </div>
-          {isProcessing && processedData && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span>Processing frames...</span>
-                <span>{Math.round(progress)}%</span>
+    <div className="container mx-auto px-4 space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <Card className="p-4 md:col-span-2">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <Input
+                type="file"
+                accept="video/*"
+                onChange={handleFileChange}
+                className="flex-1"
+                disabled={isProcessing}
+              />
+              <Button onClick={handleProcessVideo} disabled={!videoFile || isProcessing}>
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="w-4 h-4 mr-2" />
+                    Process Video
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {error && <div className="text-red-500">{error}</div>}
+
+            {isProcessing && (
+              <div className="space-y-2">
+                <Progress value={progress} />
+                <p className="text-sm text-muted-foreground text-center">{Math.round(progress)}% complete</p>
               </div>
-              <Progress value={progress} />
-              <p className="text-sm text-muted-foreground">
-                Processed {Math.floor((processedData.frames.length * progress) / 100)} of {processedData.frames.length}{" "}
-                frames
-              </p>
-            </div>
-          )}
-          {error && <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>}
-          {!videoFile && !error && (
-            <div className="border-2 border-dashed rounded-lg p-12 text-center">
-              <UploadCloud className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-2 text-sm text-muted-foreground">Upload a video file to begin processing</p>
-            </div>
-          )}
-        </div>
-      </Card>
+            )}
 
-      {processedData && currentFrame && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="lg:col-span-3 space-y-4">
-            <CanvasEditor
-              frame={currentFrame}
-              width={resolution.width}
-              height={resolution.height}
-              onMaskUpdate={handleMaskUpdate}
-              onMaskSelect={handleMaskSelect}
-              videoUrl={videoUrl}
-              currentTime={currentTime}
-            />
-            <Timeline
-              frames={processedData.frames}
-              currentTime={currentTime}
-              duration={processedData.duration}
-              onSeek={handleSeek}
-              videoUrl={videoUrl}
-            />
-          </div>
-          <div className="lg:col-span-1 space-y-4">
-            <StatisticsCard masks={currentFrame.segmentation.masks} />
-            <SegmentationTools
-              selectedMask={selectedMask}
-              onUpdateMask={handleMaskEdit}
-              onDeleteMask={handleMaskDelete}
-              onExport={handleExport}
-            />
-          </div>
-        </div>
-      )}
+            <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
+              <video
+                ref={videoRef}
+                className="absolute inset-0 w-full h-full"
+                controls
+                crossOrigin="anonymous"
+                style={{ display: currentFrame ? "block" : "none" }}
+              />
+              {currentFrame && (
+                <CanvasEditor
+                  frame={currentFrame}
+                  resolution={resolution}
+                  onMaskUpdate={handleMaskUpdate}
+                  onMaskSelect={handleMaskSelect}
+                />
+              )}
+            </div>
 
-      <video ref={videoRef} className="hidden" />
+            {processedData && (
+              <Timeline
+                frames={processedData.frames}
+                duration={processedData.duration}
+                currentTime={currentTime}
+                onSeek={handleSeek}
+              />
+            )}
+          </div>
+        </Card>
+
+        <div className="space-y-4">
+          <DetectedObjectsCard detections={detections} isLoading={isModelLoading} />
+          <SegmentationTools
+            selectedMask={selectedMask}
+            onUpdateMask={handleMaskEdit}
+            onDeleteMask={handleMaskDelete}
+            onExport={handleExport}
+          />
+          <StatisticsCard currentFrame={currentFrame} />
+        </div>
+      </div>
     </div>
   )
 }

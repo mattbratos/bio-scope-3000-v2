@@ -2,7 +2,7 @@ import { analyzeFrame } from "../lib/ai-service"
 
 interface ProcessFrameMessage {
   type: "PROCESS_FRAME"
-  frame: string // base64 image
+  frame: HTMLVideoElement | HTMLCanvasElement // Changed from string to HTML element
   timestamp: number
   frameId: string
 }
@@ -20,13 +20,26 @@ interface ProcessingResult {
 
 const ctx: Worker = self as any
 
+// Create an offscreen canvas for processing
+const canvas = new OffscreenCanvas(1, 1)
+const context = canvas.getContext('2d')!
+
 ctx.addEventListener("message", async (e: MessageEvent) => {
   const { type, frame, timestamp, frameId } = e.data as ProcessFrameMessage
 
   if (type === "PROCESS_FRAME") {
     try {
+      // Resize canvas if needed
+      if (canvas.width !== frame.width || canvas.height !== frame.height) {
+        canvas.width = frame.width
+        canvas.height = frame.height
+      }
+
+      // Draw the frame onto the canvas
+      context.drawImage(frame, 0, 0)
+
       // Process the frame with AI
-      const result = await analyzeFrame(frame)
+      const result = await analyzeFrame(canvas)
 
       // Ensure all objects have proper categorization
       const processedObjects = result.objects.map((obj) => ({

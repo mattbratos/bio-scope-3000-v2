@@ -2,6 +2,8 @@ import { VideoProcessor } from "@/components/VideoProcessor"
 import { AnimatedBackground } from "@/components/animated-background"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Logo } from "@/components/logo"
+import { VideoObjectDetection } from "@/components/VideoObjectDetection"
+
 
 export default function Home() {
   return (

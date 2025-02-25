@@ -1,78 +1,65 @@
 "use client"
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import type { Mask } from "@/types"
-import { TreesIcon as Tree, Rabbit } from "lucide-react"
+import { Card } from "@/components/ui/card"
+import type { FrameData } from "@/types"
 
 interface StatisticsCardProps {
-  masks: Mask[]
+  currentFrame: FrameData | null
 }
 
-interface ObjectCount {
-  [key: string]: number
-}
+type ObjectCount = Record<string, number>
 
-export function StatisticsCard({ masks }: StatisticsCardProps) {
+export function StatisticsCard({ currentFrame }: StatisticsCardProps) {
+  if (!currentFrame) {
+    return (
+      <Card className="p-4">
+        <h3 className="text-lg font-semibold mb-4">Statistics</h3>
+        <p className="text-center text-muted-foreground">No frame selected</p>
+      </Card>
+    )
+  }
+
   // Count objects by label
-  const objectCounts = masks.reduce((acc: ObjectCount, mask) => {
+  const objectCounts = currentFrame.segmentation.masks.reduce((acc: ObjectCount, mask) => {
     acc[mask.label] = (acc[mask.label] || 0) + 1
     return acc
   }, {})
 
-  // Separate static and dynamic objects
-  const staticObjects = masks
-    .filter((mask) => mask.category === "static")
-    .reduce((acc: ObjectCount, mask) => {
-      acc[mask.label] = (acc[mask.label] || 0) + 1
-      return acc
-    }, {})
+  // Calculate total objects
+  const totalObjects = Object.values(objectCounts).reduce((sum, count) => sum + count, 0)
 
-  const dynamicObjects = masks
-    .filter((mask) => mask.category === "dynamic")
-    .reduce((acc: ObjectCount, mask) => {
-      acc[mask.label] = (acc[mask.label] || 0) + 1
-      return acc
-    }, {})
+  // Calculate average confidence
+  const averageConfidence = currentFrame.segmentation.masks.length
+    ? (
+        currentFrame.segmentation.masks.reduce((sum, mask) => sum + mask.confidence, 0) /
+        currentFrame.segmentation.masks.length
+      ).toFixed(2)
+    : 0
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <div className="flex gap-2">
-            <Tree className="h-5 w-5" />
-            <Rabbit className="h-5 w-5" />
-          </div>
-          Detected Objects
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-4">
+    <Card className="p-4">
+      <h3 className="text-lg font-semibold mb-4">Statistics</h3>
+      <div className="space-y-4">
         <div>
-          <h4 className="text-sm font-semibold text-muted-foreground mb-2">Static Objects</h4>
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(staticObjects).map(([label, count]) => (
-              <div key={label} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                <span className="text-sm font-medium">{label}</span>
-                <span className="text-sm text-muted-foreground">{count}</span>
-              </div>
-            ))}
-          </div>
+          <p className="text-sm text-muted-foreground">Total Objects</p>
+          <p className="text-2xl font-bold">{totalObjects}</p>
         </div>
         <div>
-          <h4 className="text-sm font-semibold text-muted-foreground mb-2">Dynamic Objects</h4>
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(dynamicObjects).map(([label, count]) => (
-              <div key={label} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                <span className="text-sm font-medium">{label}</span>
-                <span className="text-sm text-muted-foreground">{count}</span>
-              </div>
+          <p className="text-sm text-muted-foreground">Average Confidence</p>
+          <p className="text-2xl font-bold">{averageConfidence}</p>
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground mb-2">Objects by Type</p>
+          <ul className="space-y-1">
+            {Object.entries(objectCounts).map(([label, count]) => (
+              <li key={label} className="flex justify-between items-center text-sm">
+                <span>{label}</span>
+                <span className="font-medium">{count}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
-        <div className="flex justify-between items-center pt-2 border-t">
-          <span className="text-sm font-medium">Total Objects</span>
-          <span className="text-sm text-muted-foreground">{masks.length}</span>
-        </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }

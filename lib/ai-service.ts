@@ -1,5 +1,6 @@
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+import * as tf from '@tensorflow/tfjs'
+import * as cocoSsd from "@tensorflow-models/coco-ssd"
+import { NATURE_CATEGORIES } from "@/config/animals"
 
 interface DetectedObject {
   label: string
@@ -12,52 +13,26 @@ interface AnalyzeFrameResult {
   objects: DetectedObject[]
 }
 
-const NATURE_CATEGORIES = {
-  static: ["tree", "mountain", "rock", "bush", "lake", "river", "forest"],
-  dynamic: ["bear", "bird", "deer", "fox", "wolf", "rabbit", "squirrel", "insect"],
+let model: cocoSsd.ObjectDetection | null = null
+
+async function ensureModel() {
+  if (!model) {
+    await tf.ready()
+    model = await cocoSsd.load({
+      base: 'lite_mobilenet_v2'
+    })
+  }
+  return model
 }
 
-const NATURE_PROMPT = `Analyze this image and detect natural elements, focusing on:
-
-Static objects (e.g., trees, mountains, rocks):
-- Exact type and count
-- Location and size
-- Confidence level
-
-Dynamic objects (e.g., animals, birds):
-- Species identification
-- Movement patterns
-- Confidence level
-
-Return a JSON object with detected objects, including:
-1. Label (specific natural element)
-2. Confidence score (0-1)
-3. Bounding box [x, y, width, height]
-4. Category ("static"/"dynamic")
-
-Focus only on natural elements and wildlife.`
-
-export async function analyzeFrame(imageBase64: string): Promise<AnalyzeFrameResult> {
+export async function analyzeFrame(imageElement: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement): Promise<AnalyzeFrameResult> {
   try {
-    const { text } = await generateText({
-      model: openai("gpt-4-vision"),
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: NATURE_PROMPT },
-            { type: "image", image: imageBase64 },
-          ],
-        },
-      ],
-    })
+    const detector = await ensureModel()
+    const predictions = await detector.detect(imageElement)
 
-    // Parse and validate the response
-    const rawResult = JSON.parse(text)
-
-    // Ensure proper categorization
-    const objects = rawResult.objects.map((obj: DetectedObject) => {
-      const label = obj.label.toLowerCase()
+    // Convert predictions to our format
+    const objects = predictions.map(pred => {
+      const label = pred.class.toLowerCase()
       const category = NATURE_CATEGORIES.static.some((item) => label.includes(item))
         ? "static"
         : NATURE_CATEGORIES.dynamic.some((item) => label.includes(item))
@@ -65,10 +40,10 @@ export async function analyzeFrame(imageBase64: string): Promise<AnalyzeFrameRes
           : "static" // Default to static if uncertain
 
       return {
-        ...obj,
-        category,
-        // Ensure confidence is a number between 0 and 1
-        confidence: Math.min(Math.max(obj.confidence, 0), 1),
+        label: pred.class,
+        confidence: pred.score,
+        bbox: [pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]] as [number, number, number, number],
+        category
       }
     })
 
