@@ -30,7 +30,11 @@ export function VideoProcessor() {
   const [progress, setProgress] = useState(0)
   const [selectedMask, setSelectedMask] = useState<Mask | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [detections, setDetections] = useState<Record<string, number>>({})
+  const [detections, setDetections] = useState<Record<string, {
+    count: number,
+    confidence: number,
+    timestamps: number[]
+  }>>({})
   const [persistentAnimals, setPersistentAnimals] = useState<Record<string, { count: number, lastConfidence: number }>>({})
   const [isModelLoading, setIsModelLoading] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -149,7 +153,16 @@ export function VideoProcessor() {
         })
         
         console.log("🐾 Final animal counts (including persistent):", combinedDetections)
-        setDetections(combinedDetections)
+        setDetections(prev => ({
+          ...prev,
+          ...combinedDetections.map(count => ({
+            [Object.keys(combinedDetections)[0]]: {
+              count,
+              confidence: 1,
+              timestamps: [videoRef.current?.currentTime || 0]
+            }
+          }))
+        }))
 
         // Use all predictions for segmentation
         const objects = predictions.map(pred => ({
@@ -402,10 +415,19 @@ export function VideoProcessor() {
             category: obj.category,
           }))
 
-          // Update persistent animals
+          // Update detections with timestamps
           objects.forEach(obj => {
             if (ANIMAL_CLASSES.has(obj.label)) {
-              console.log(`🦁 Found animal: ${obj.label} with confidence ${obj.confidence.toFixed(2)}`)
+              console.log(`🦁 Found animal: ${obj.label} with confidence ${obj.confidence.toFixed(2)} at ${currentTime.toFixed(2)}s`)
+              setDetections(prev => ({
+                ...prev,
+                [obj.label]: {
+                  count: (prev[obj.label]?.count || 0) + 1,
+                  confidence: Math.max(obj.confidence, prev[obj.label]?.confidence || 0),
+                  timestamps: [...(prev[obj.label]?.timestamps || []), currentTime]
+                }
+              }))
+
               setPersistentAnimals(prev => ({
                 ...prev,
                 [obj.label]: {
@@ -711,14 +733,18 @@ export function VideoProcessor() {
         </Card>
 
         <div className="space-y-4">
-          <DetectedObjectsCard detections={detections} isLoading={isModelLoading} />
+          <DetectedObjectsCard 
+            detections={detections}
+            isLoading={isModelLoading}
+            onTimestampClick={(time) => handleSeek(time)}
+          />
           <SegmentationTools
             selectedMask={selectedMask}
             onUpdateMask={handleMaskEdit}
             onDeleteMask={handleMaskDelete}
             onExport={handleExport}
           />
-          <StatisticsCard currentFrame={currentFrame} />
+          {/* <StatisticsCard currentFrame={currentFrame} /> */}
         </div>
       </div>
     </div>
