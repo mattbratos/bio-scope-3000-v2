@@ -38,6 +38,10 @@ export function VideoProcessor() {
   const modelRef = useRef<cocoSsd.ObjectDetection | null>(null)
   const [resolution, setResolution] = useState({ width: 0, height: 0 })
 
+  // Constants
+  const PREVIEW_FPS = 2
+  const ANALYSIS_FPS = 10  // Higher FPS for analysis
+
   // Initialize TensorFlow.js backend
   useEffect(() => {
     async function initTF() {
@@ -71,6 +75,11 @@ export function VideoProcessor() {
       }
     }
     loadModel()
+  }, [])
+
+  // Initialize AI processor
+  useEffect(() => {
+    processorRef.current = new AIProcessor()
   }, [])
 
   // Initialize AI processor
@@ -201,8 +210,14 @@ export function VideoProcessor() {
     const file = e.target.files?.[0]
     if (!file) return
 
+    console.log("📁 Loading video file:", file.name)
     setVideoFile(file)
     setError(null)
+    // Reset states
+    setProcessedData(null)
+    setCurrentFrame(null)
+    setPersistentAnimals({})
+    setDetections({})
 
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl)
@@ -223,61 +238,258 @@ export function VideoProcessor() {
         video.onerror = reject
       })
 
+      console.log("📼 Video metadata loaded:", {
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight
+      })
+
       // Set up resolution manager
       const resManager = new ResolutionManager(video.videoWidth, video.videoHeight)
       const processRes = resManager.getProcessingResolution()
       setResolution(processRes)
 
-      // Create frames at regular intervals (10 fps)
-      const fps = 10
-      const frameCount = Math.ceil(video.duration * fps)
-      const interval = 1 / fps
-      const frames: FrameData[] = Array.from({ length: frameCount }, (_, i) => ({
-        id: `frame-${i}`,
-        timestamp: i * interval,
-        segmentation: {
-          masks: [],
-          labels: [],
-          confidence: [],
-        },
-        thumbnail: "/placeholder.svg?height=90&width=160",
-      }))
+      // Create frames at lower rate for preview
+      const frameCount = Math.ceil(video.duration * PREVIEW_FPS)
+      const interval = 1 / PREVIEW_FPS
+      const frames: FrameData[] = []
 
-      setProcessedData({
+      console.log("🎞️ Generating preview frames:", {
+        frameCount,
+        interval,
+        fps: PREVIEW_FPS
+      })
+
+      // Generate frame previews
+      const canvas = document.createElement('canvas')
+      canvas.width = 160  // thumbnail width
+      canvas.height = 90  // thumbnail height
+      const ctx = canvas.getContext('2d')
+
+      for (let i = 0; i < frameCount; i++) {
+        video.currentTime = i * interval
+        await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }))
+        
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.7)
+          
+          frames.push({
+            id: `frame-${i}`,
+            timestamp: i * interval,
+            segmentation: {
+              masks: [],
+              labels: [],
+              confidence: [],
+            },
+            thumbnail: thumbnail,
+          })
+        }
+      }
+
+      // Reset video time
+      video.currentTime = 0
+
+      const initialData = {
         frames,
         duration: video.duration,
         resolution: processRes,
+      }
+
+      console.log("✅ Initial data prepared:", {
+        frameCount: frames.length,
+        duration: video.duration,
+        resolution: processRes
       })
+
+      setProcessedData(initialData)
       setCurrentFrame(frames[0])
+
     } catch (error) {
-      console.error("Error loading video:", error)
+      console.error("❌ Error loading video:", error)
       setError(error instanceof Error ? error.message : "Failed to load video file")
     }
   }
 
   const handleProcessVideo = async () => {
-    if (!videoRef.current || !processorRef.current || !processedData) return
+    // Add debug logging for initial state
+    console.log("🔍 Checking initial state:", {
+      videoRef: !!videoRef.current,
+      processorRef: !!processorRef.current,
+      processedData: !!processedData,
+      modelRef: !!modelRef.current,
+      videoFile: !!videoFile
+    })
 
+    if (!videoRef.current || !processorRef.current || !processedData || !modelRef.current) {
+      console.error("❌ Missing required refs:", {
+        hasVideo: !!videoRef.current,
+        hasProcessor: !!processorRef.current,
+        hasProcessedData: !!processedData,
+        hasModel: !!modelRef.current
+      })
+      setError("Please ensure video is loaded before processing")
+      return
+    }
+
+    console.log("🎬 Starting video processing...")
     setIsProcessing(true)
     setProgress(0)
     setError(null)
 
     try {
-      // Process each frame
-      for (let i = 0; i < processedData.frames.length; i++) {
-        const frame = processedData.frames[i]
-        const frameImage = await processorRef.current.extractFrame(videoRef.current, frame.timestamp)
+      const video = videoRef.current
+      video.pause()  // Ensure video is paused initially
+      console.log("📹 Video info:", {
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight
+      })
+      
+      // Create a map to store analysis results
+      const analysisResults = new Map<number, {
+        masks: Mask[],
+        labels: string[],
+        confidence: number[]
+      }>()
 
-        await processorRef.current.processFrame(frameImage, frame.timestamp, frame.id)
+      // Process each frame at regular intervals
+      const frameInterval = 1 / ANALYSIS_FPS
+      let currentTime = 0
+      let totalDetections = 0
 
-        const progress = ((i + 1) / processedData.frames.length) * 100
-        setProgress(progress)
+      console.log("⚙️ Processing configuration:", {
+        frameInterval,
+        totalFrames: Math.ceil(video.duration * ANALYSIS_FPS),
+        fps: ANALYSIS_FPS
+      })
+
+      while (currentTime <= video.duration) {
+        // Set video to current time
+        video.currentTime = currentTime
+        console.log(`\n🎯 Processing frame at ${currentTime.toFixed(2)}s`)
+        
+        // Wait for the video to seek to the specified time
+        await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }))
+
+        try {
+          // Run detection on the current frame
+          console.log("🔍 Running detection...")
+          const predictions = await modelRef.current.detect(video)
+          console.log("📊 Raw predictions:", predictions)
+          
+          // Convert predictions to masks and store results
+          const objects = predictions
+            .filter(pred => pred.score > 0.5) // Only keep predictions with confidence > 50%
+            .map(pred => ({
+              label: pred.class,
+              confidence: pred.score,
+              bbox: [pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]] as [number, number, number, number],
+              category: ANIMAL_CLASSES.has(pred.class) ? "dynamic" : "static"
+            }))
+
+          console.log("🎯 Filtered objects:", objects.map(obj => ({
+            label: obj.label,
+            confidence: obj.confidence.toFixed(2),
+            category: obj.category
+          })))
+
+          const masks = objects.map((obj) => ({
+            id: `mask-${Math.random()}`,
+            points: convertBBoxToPoints(obj.bbox),
+            label: obj.label,
+            confidence: obj.confidence,
+            category: obj.category,
+          }))
+
+          // Update persistent animals
+          objects.forEach(obj => {
+            if (ANIMAL_CLASSES.has(obj.label)) {
+              console.log(`🦁 Found animal: ${obj.label} with confidence ${obj.confidence.toFixed(2)}`)
+              setPersistentAnimals(prev => ({
+                ...prev,
+                [obj.label]: {
+                  count: (prev[obj.label]?.count || 0) + 1,
+                  lastConfidence: obj.confidence
+                }
+              }))
+            }
+          })
+
+          totalDetections += objects.length
+          console.log(`📈 Total detections so far: ${totalDetections}`)
+
+          // Store results for this frame
+          const frameIndex = Math.round(currentTime * ANALYSIS_FPS)
+          analysisResults.set(frameIndex, {
+            masks,
+            labels: objects.map(obj => obj.label),
+            confidence: objects.map(obj => obj.confidence)
+          })
+
+          // Update current frame for display
+          setCurrentFrame(prev => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              segmentation: {
+                masks,
+                labels: objects.map(obj => obj.label),
+                confidence: objects.map(obj => obj.confidence),
+              }
+            }
+          })
+
+          // Update progress
+          const progress = (currentTime / video.duration) * 100
+          setProgress(progress)
+          console.log(`✨ Frame processed - Progress: ${progress.toFixed(1)}%`)
+
+        } catch (error) {
+          console.error(`❌ Error processing frame at ${currentTime}:`, error)
+        }
+
+        // Move to next frame
+        currentTime += frameInterval
       }
+
+      console.log("\n🎉 Processing complete!")
+      console.log("📊 Final statistics:", {
+        totalFramesProcessed: Math.ceil(video.duration * ANALYSIS_FPS),
+        totalDetections,
+        uniqueAnimals: Object.keys(persistentAnimals).length
+      })
+
+      // Update processedData with all analysis results
+      setProcessedData(prev => {
+        if (!prev) return prev
+        const updatedData = {
+          ...prev,
+          frames: prev.frames.map(frame => {
+            const frameIndex = Math.round(frame.timestamp * ANALYSIS_FPS)
+            const analysis = analysisResults.get(frameIndex)
+            return analysis ? {
+              ...frame,
+              segmentation: analysis
+            } : frame
+          })
+        }
+        console.log("💾 Final processed data:", {
+          totalFrames: updatedData.frames.length,
+          framesWithDetections: updatedData.frames.filter(f => f.segmentation.masks.length > 0).length
+        })
+        return updatedData
+      })
+
     } catch (error) {
-      console.error("Error processing video:", error)
+      console.error("❌ Error processing video:", error)
       setError(error instanceof Error ? error.message : "An unexpected error occurred")
     } finally {
       setIsProcessing(false)
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0
+      }
+      console.log("🏁 Processing finished")
     }
   }
 
@@ -375,6 +587,11 @@ export function VideoProcessor() {
           duration: processedData.duration,
           resolution: processedData.resolution,
           processedAt: new Date().toISOString(),
+          totalFrames: processedData.frames.length,
+          detectedObjects: Object.fromEntries(
+            Object.entries(persistentAnimals)
+              .filter(([_, data]) => data.lastConfidence > 0.5)
+          )
         },
         frames: processedData.frames.map((frame) => ({
           timestamp: frame.timestamp,
@@ -383,8 +600,22 @@ export function VideoProcessor() {
             category: mask.category,
             confidence: mask.confidence,
             points: mask.points,
+            boundingBox: {
+              x: Math.min(...mask.points.map(p => p.x)),
+              y: Math.min(...mask.points.map(p => p.y)),
+              width: Math.max(...mask.points.map(p => p.x)) - Math.min(...mask.points.map(p => p.x)),
+              height: Math.max(...mask.points.map(p => p.y)) - Math.min(...mask.points.map(p => p.y))
+            }
           })),
         })),
+        summary: {
+          uniqueObjects: Array.from(new Set(processedData.frames.flatMap(f => 
+            f.segmentation.masks.map(m => m.label)
+          ))),
+          averageConfidence: processedData.frames.reduce((acc, frame) => 
+            acc + (frame.segmentation.confidence.reduce((sum, c) => sum + c, 0) / 
+            (frame.segmentation.confidence.length || 1)), 0) / processedData.frames.length
+        }
       }
 
       const blob = new Blob([JSON.stringify(exportData, null, 2)], {
@@ -393,7 +624,7 @@ export function VideoProcessor() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = "video-analysis.json"
+      a.download = `video-analysis-${new Date().toISOString()}.json`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -402,7 +633,7 @@ export function VideoProcessor() {
       console.error("Error exporting data:", error)
       setError("Failed to export analysis results")
     }
-  }, [processedData])
+  }, [processedData, persistentAnimals])
 
   // Cleanup
   useEffect(() => {
