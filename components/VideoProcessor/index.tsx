@@ -737,14 +737,8 @@ export function VideoProcessor() {
             detections={detections}
             isLoading={isModelLoading}
             onTimestampClick={(time) => handleSeek(time)}
-          />
-          <SegmentationTools
-            selectedMask={selectedMask}
-            onUpdateMask={handleMaskEdit}
-            onDeleteMask={handleMaskDelete}
             onExport={handleExport}
           />
-          {/* <StatisticsCard currentFrame={currentFrame} /> */}
         </div>
       </div>
     </div>

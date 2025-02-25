@@ -2,7 +2,8 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { formatTime } from "@/lib/utils"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Clock } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Clock, Download } from "lucide-react"
 
 interface DetectedObjectsCardProps {
   detections: Record<string, {
@@ -12,12 +13,14 @@ interface DetectedObjectsCardProps {
   }>
   isLoading?: boolean
   onTimestampClick?: (time: number) => void
+  onExport?: () => void
 }
 
 export function DetectedObjectsCard({ 
   detections, 
   isLoading = false,
-  onTimestampClick 
+  onTimestampClick,
+  onExport
 }: DetectedObjectsCardProps) {
   const getTimeRange = (timestamps: number[]) => {
     if (timestamps.length === 0) return null
@@ -30,8 +33,18 @@ export function DetectedObjectsCard({
 
   return (
     <Card className="w-full max-w-2xl">
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <CardTitle>Detected Objects</CardTitle>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-2 text-xs gap-1.5"
+          onClick={onExport}
+          disabled={isLoading || Object.keys(detections).length === 0}
+        >
+          <Download className="w-3.5 h-3.5" />
+          Export Results
+        </Button>
       </CardHeader>
       <CardContent>
         {isLoading ? (
