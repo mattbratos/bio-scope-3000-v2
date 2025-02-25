@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { Card } from "@/components/ui/card"
-import type { FrameData, Point } from "@/types"
+import type { FrameData, Point, Mask } from "@/types"
 import { useTheme } from "next-themes"
 
 interface CanvasEditorProps {
@@ -10,11 +10,12 @@ interface CanvasEditorProps {
   width: number
   height: number
   onMaskUpdate?: (maskId: string, points: Point[]) => void
+  onMaskSelect?: (mask: Mask) => void
   videoUrl?: string
   currentTime?: number
 }
 
-export function CanvasEditor({ frame, width, height, onMaskUpdate, videoUrl, currentTime = 0 }: CanvasEditorProps) {
+export function CanvasEditor({ frame, width, height, onMaskUpdate, onMaskSelect, videoUrl, currentTime = 0 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)

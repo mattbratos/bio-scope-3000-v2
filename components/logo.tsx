@@ -24,10 +24,10 @@ export function Logo() {
     canvas.height = 60
 
     function drawPixelatedText() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx!.clearRect(0, 0, canvas!.width, canvas!.height)
 
       // Create gradient for base text
-      const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0)
+      const gradient = ctx!.createLinearGradient(0, 0, canvas!.width, 0)
       if (theme === "dark") {
         gradient.addColorStop(0, "#00ff00") // Bright green
         gradient.addColorStop(0.5, "#00dd00") // Slightly darker
@@ -39,21 +39,21 @@ export function Logo() {
       }
 
       // Draw base text
-      ctx.fillStyle = gradient
-      ctx.font = "bold 32px 'GeistMono'"
-      ctx.fillText(text, 20, 40)
+      ctx!.fillStyle = gradient
+      ctx!.font = "bold 32px 'GeistMono'"
+      ctx!.fillText(text, 20, 40)
 
       // Get image data
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const imageData = ctx!.getImageData(0, 0, canvas!.width, canvas!.height)
       const data = imageData.data
 
       // Clear canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx!.clearRect(0, 0, canvas!.width, canvas!.height)
 
       // Draw pixelated version
-      for (let y = 0; y < canvas.height; y += pixelSize) {
-        for (let x = 0; x < canvas.width; x += pixelSize) {
-          const index = (y * canvas.width + x) * 4
+      for (let y = 0; y < canvas!.height; y += pixelSize) {
+        for (let x = 0; x < canvas!.width; x += pixelSize) {
+          const index = (y * canvas!.width + x) * 4
           if (data[index + 3] > 128) {
             // If pixel is visible
             const brightness = Math.random() * 0.4 + 0.6 // Random brightness
@@ -61,17 +61,17 @@ export function Logo() {
               theme === "dark"
                 ? `rgba(0, 255, 0, ${brightness})` // Bright green in dark mode
                 : `rgba(0, 160, 0, ${brightness})` // Darker green in light mode
-            ctx.fillStyle = color
-            ctx.fillRect(x, y, pixelSize, pixelSize)
+            ctx!.fillStyle = color
+            ctx!.fillRect(x, y, pixelSize, pixelSize)
           }
         }
       }
 
       // Add subtle glow effect
-      ctx.shadowColor = theme === "dark" ? "#00ff0033" : "#00800033"
-      ctx.shadowBlur = 8
-      ctx.shadowOffsetX = 0
-      ctx.shadowOffsetY = 0
+      ctx!.shadowColor = theme === "dark" ? "#00ff0033" : "#00800033"
+      ctx!.shadowBlur = 8
+      ctx!.shadowOffsetX = 0
+      ctx!.shadowOffsetY = 0
     }
 
     // Initial draw

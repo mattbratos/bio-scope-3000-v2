@@ -24,8 +24,8 @@ export function AnimatedBackground() {
       opacity: number
 
       constructor() {
-        this.x = Math.random() * canvas.width
-        this.y = Math.random() * canvas.height
+        this.x = Math.random() * canvas!.width
+        this.y = Math.random() * canvas!.height
         this.size = Math.random() * 3 + 1 // Increased size
         this.speedX = Math.random() * 0.8 - 0.4 // Increased speed
         this.speedY = Math.random() * 0.8 - 0.4
@@ -36,10 +36,10 @@ export function AnimatedBackground() {
         this.x += this.speedX
         this.y += this.speedY
 
-        if (this.x < 0) this.x = canvas.width
-        if (this.x > canvas.width) this.x = 0
-        if (this.y < 0) this.y = canvas.height
-        if (this.y > canvas.height) this.y = 0
+        if (this.x < 0) this.x = canvas!.width
+        if (this.x > canvas!.width) this.x = 0
+        if (this.y < 0) this.y = canvas!.height
+        if (this.y > canvas!.height) this.y = 0
       }
 
       draw(ctx: CanvasRenderingContext2D) {
@@ -65,23 +65,23 @@ export function AnimatedBackground() {
           if (distance < 150) {
             // Increased connection distance
             const opacity = (1 - distance / 150) * 0.4 // Increased opacity
-            ctx.beginPath()
-            ctx.strokeStyle = `rgba(128, 128, 128, ${opacity})`
-            ctx.lineWidth = 1.5 // Increased line width
-            ctx.moveTo(particles[i].x, particles[i].y)
-            ctx.lineTo(particles[j].x, particles[j].y)
-            ctx.stroke()
+            ctx!.beginPath()
+            ctx!.strokeStyle = `rgba(128, 128, 128, ${opacity})`
+            ctx!.lineWidth = 1.5 // Increased line width
+            ctx!.moveTo(particles[i].x, particles[i].y)
+            ctx!.lineTo(particles[j].x, particles[j].y)
+            ctx!.stroke()
           }
         }
       }
     }
 
     function animate() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx!.clearRect(0, 0, canvas!.width, canvas!.height)
 
       particles.forEach((particle) => {
         particle.update()
-        particle.draw(ctx)
+        particle.draw(ctx!)
       })
 
       connectParticles()
@@ -90,8 +90,8 @@ export function AnimatedBackground() {
 
     // Handle resize
     function handleResize() {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
+      canvas!.width = window.innerWidth
+      canvas!.height = window.innerHeight
     }
 
     handleResize()

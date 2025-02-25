@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { UploadCloud, Loader2 } from "lucide-react"
 import { CanvasEditor } from "../Canvas/Editor"
-import { Timeline } from "../UI/Timeline"
+import { Timeline } from "../ui/Timeline"
 import { SegmentationTools } from "../SegmentationTools"
 import { StatisticsCard } from "../StatisticsCard"
 import type { ProcessedVideoData, FrameData, Point, Mask, ExportData } from "@/types"
@@ -387,6 +387,4 @@ function convertBBoxToPoints(bbox: [number, number, number, number]): Point[] {
     { x, y: y + height },
   ]
 }
-
-export { VideoProcessor }
 
